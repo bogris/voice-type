@@ -37,8 +37,13 @@ final class KeyboardViewController: UIInputViewController {
 
     /// iOS blocks extensions from opening URLs, apart from via the app object up the responder
     /// chain, which is how every keyboard of this kind reaches its app.
-    func openApp() {
-        guard let url = URL(string: "voicetype://session") else { return }
+    func openApp() { open("voicetype://session") }
+
+    /// Threadbear's own app takes this link and just comes forward.
+    func openThreadbear() { open("threadbear://open") }
+
+    private func open(_ link: String) {
+        guard let url = URL(string: link) else { return }
         var responder: UIResponder? = self
         while let current = responder {
             if let application = current as? UIApplication {
@@ -189,6 +194,7 @@ final class KeyboardViewController: UIInputViewController {
     }
 
     func globe() { controller?.advanceToNextInputMode() }
+    func threadbear() { controller?.openThreadbear() }
     func key(_ text: String) {
         lastInserted = nil
         controller?.insertRaw(text)
@@ -215,6 +221,8 @@ struct KeyboardView: View {
                 } else if model.waiting != nil {
                     KeyButton(system: "text.badge.plus") { model.dropInWaiting() }
                 }
+                KeyButton(system: "pawprint") { model.threadbear() }
+                    .accessibilityLabel("Open Threadbear")
                 KeyButton(label: ",") { model.key(",") }
                 KeyButton(label: ".") { model.key(".") }
                 KeyButton(system: "space") { model.key(" ") }.frame(maxWidth: .infinity)
