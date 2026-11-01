@@ -116,7 +116,11 @@ public final class LogFile: @unchecked Sendable {
     private let keepLines: Int
     private var size = 0
 
+    #if os(macOS)
     public static var defaultURL: URL { LaunchAgents.logDirectory.appendingPathComponent("voice-type-native.log") }
+    #else
+    public static var defaultURL: URL { VoiceTypePaths.dataDirectory.appendingPathComponent("voice-type-native.log") }
+    #endif
     public static let defaultMaxBytes = 1_048_576
     public static let defaultKeepLines = 2_000
 

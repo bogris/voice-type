@@ -1,3 +1,5 @@
+// Mac only: nothing on the iPhone runs launchd jobs or a second copy to lock against.
+#if os(macOS)
 import Darwin
 import Foundation
 
@@ -90,3 +92,4 @@ public enum LockHolder: Equatable, Sendable {
         path.hasSuffix("/Contents/MacOS/voice-type-native") || path.hasSuffix("/voice-type-native")
     }
 }
+#endif

@@ -142,6 +142,7 @@ public final class StallDetector: @unchecked Sendable {
     private func answered() { lock.withLock { outstanding = nil } }
 }
 
+#if os(macOS)
 /// When a copy of the app may take the instance lock (and so the hotkey).
 ///
 /// The copy that dictates should be launchd's, so crashes, watchdogs and `restart` all bring it
@@ -193,3 +194,4 @@ public enum LockPolicy {
         return .take
     }
 }
+#endif

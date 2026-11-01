@@ -5,9 +5,13 @@ import PackageDescription
 // executable. See PLAN.md for where this is going and README.md for building and running it.
 let package = Package(
     name: "VoiceTypeNative",
-    platforms: [.macOS("26.0")],
+    platforms: [.macOS("26.0"), .iOS("26.0")],
     products: [
         .executable(name: "voice-type-native", targets: ["voice-type-native"]),
+        // For the iPhone app in ../ios, which shares the word list, the gates, the loop guard
+        // and the engine. Only these two targets ever build for iOS.
+        .library(name: "VoiceTypeCore", targets: ["VoiceTypeCore"]),
+        .library(name: "VoiceTypeWhisper", targets: ["VoiceTypeWhisper"]),
     ],
     targets: [
         // ggml-org's prebuilt whisper.cpp, release b5454: the exact binary the benchmark's

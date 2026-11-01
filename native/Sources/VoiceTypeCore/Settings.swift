@@ -8,7 +8,9 @@ public enum VoiceTypePaths {
         if let custom = ProcessInfo.processInfo.environment["VOICE_TYPE_DATA_DIR"], !custom.isEmpty {
             return URL(fileURLWithPath: (custom as NSString).expandingTildeInPath).resolvingSymlinksInPath()
         }
-        return FileManager.default.homeDirectoryForCurrentUser
+        // NSHomeDirectory because homeDirectoryForCurrentUser doesn't exist on iOS. It's the same
+        // folder on the Mac, and the iPhone app keeps its own data rather than using this.
+        return URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent("Library/Application Support/Voice Type")
     }
 

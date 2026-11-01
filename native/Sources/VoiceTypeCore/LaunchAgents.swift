@@ -1,3 +1,5 @@
+// Mac only: nothing on the iPhone runs launchd jobs or a second copy to lock against.
+#if os(macOS)
 import Foundation
 
 // Voice Type Native runs from its own LaunchAgent, so launchd starts it at login and brings it
@@ -113,3 +115,4 @@ public enum LaunchAgentCheck {
         return nil
     }
 }
+#endif
