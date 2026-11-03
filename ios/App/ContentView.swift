@@ -52,7 +52,11 @@ struct ContentView: View {
                 .foregroundStyle(.tint)
                 .accessibilityLabel("Go back to your app")
         }
-        .onTapGesture { cameFromKeyboard = false }
+        // Tapping it should take you back, not just hide it and leave the "◀" link to find.
+        .onTapGesture {
+            ReturnToPreviousApp.go()
+            cameFromKeyboard = false
+        }
     }
 
     private var setup: some View {

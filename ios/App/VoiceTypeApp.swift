@@ -16,7 +16,7 @@ struct VoiceTypeApp: App {
                     Task {
                         await SessionEngine.shared.startSession()
                         // Only back to where you were if it worked; otherwise the problem shows here.
-                        if SessionEngine.shared.phase != .off { ReturnToPreviousApp.go() }
+                        if SessionEngine.shared.phase != .off { await ReturnToPreviousApp.goSoon() }
                     }
                 }
         }
@@ -41,15 +41,37 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
 /// in the status bar through its private API. An App Store build would need this taken out, and
 /// the swipe-back hint already on screen is what's left then.
 enum ReturnToPreviousApp {
-    @MainActor static func go() {
+    /// On a cold start onOpenURL fires before the app is active, and the "◀ Messages" link isn't
+    /// wired up yet, so one early try does nothing and leaves you on the arrow. Keep trying for a
+    /// moment until it takes (the app stops being active once it has).
+    @MainActor static func goSoon() async {
+        for delay in [0, 150, 300, 500, 800, 1200] {
+            try? await Task.sleep(for: .milliseconds(delay))
+            guard UIApplication.shared.applicationState == .active else {
+                if UIApplication.shared.applicationState == .background { return }
+                continue
+            }
+            if go() { try? await Task.sleep(for: .milliseconds(300)) }
+            if UIApplication.shared.applicationState != .active { return }
+        }
+    }
+
+    /// Returns whether the private call was made, not whether iOS acted on it.
+    @discardableResult @MainActor static func go() -> Bool {
         let action = NSSelectorFromString(["_system", "Navigation", "Action"].joined())
         let send = NSSelectorFromString(["send", "Response", "For", "Destination:"].joined())
-        guard UIApplication.shared.responds(to: action),
-              let navigation = UIApplication.shared.perform(action)?.takeUnretainedValue() as? NSObject,
-              navigation.responds(to: send),
-              let method = navigation.method(for: send) else { return }
-        typealias Send = @convention(c) (AnyObject, Selector, UInt) -> Void
-        // Destination 0 is the app you came from.
-        unsafeBitCast(method, to: Send.self)(navigation, send, 0)
+        // Older iOS keeps it on the app; scene-based apps may only have it on the window scene.
+        let owners: [NSObject] = [UIApplication.shared]
+            + UIApplication.shared.connectedScenes.compactMap { $0 as NSObject }
+        for owner in owners where owner.responds(to: action) {
+            guard let navigation = owner.perform(action)?.takeUnretainedValue() as? NSObject,
+                  navigation.responds(to: send),
+                  let method = navigation.method(for: send) else { continue }
+            typealias Send = @convention(c) (AnyObject, Selector, UInt) -> Void
+            // Destination 0 is the app you came from.
+            unsafeBitCast(method, to: Send.self)(navigation, send, 0)
+            return true
+        }
+        return false
     }
 }
