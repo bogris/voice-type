@@ -89,11 +89,66 @@ public enum AudioGate {
         "subtitles by the amara org community",
     ]
 
+    /// The silence phrases plus "Okay.", which Whisper also tacks onto the end of a real
+    /// dictation (see `droppingSilentEnding`). Not used for whole clips, where a quiet real
+    /// "Okay." on its own is a dictation.
+    public static let endingPhrases: Set<String> = silencePhrases.union(["okay", "ok"])
+
+    /// The last segment's audio peak has to stay under this, and under `endingMaxPeakRatio`
+    /// of the dictation's own peak, for it to count as made up. The same room-level line as
+    /// `isLongNearSilentClip`, and the ratio keeps a quiet microphone's real words.
+    public static let endingMaxPeak = 0.008
+    public static let endingMaxPeakRatio = 0.15
+    /// Whisper is sure of a real word. Its made-up endings start at 13 to 69%.
+    public static let endingMaxFirstTokenProb = 0.75
+    /// Whisper starts a made-up segment where the last real one ended, so its first moments
+    /// can still hold the end of the real sentence. Only skipped for `endingPhrases`.
+    public static let endingGraceSec = 0.2
+
+    /// The transcript without the segments Whisper made up at the end of a real dictation.
+    ///
+    /// Native only. When a dictation ends on a pause before the key comes up, whisper.cpp
+    /// often adds a segment of its own over the silence: "Thank you." (four times, all on
+    /// clips just over 30 s, whose second window was silence), "Okay." (eight) and "Yeah." or
+    /// "Sure." (four) from 24 October to 4 November 2026. Each had text before it, Whisper
+    /// was 13 to 69% sure of its first word, and from where it started (0.2 s later for the
+    /// stock phrases) to the end of the clip the audio never got above 0.005, against
+    /// 0.04 to 0.18 for the speech before it. None of the other 601 dictations with more than
+    /// one segment match. Trimming the silent tail before Whisper was tried first and only
+    /// fixed 5 of the 12 "Thank you."/"Okay." cases.
+    public static func droppingSilentEnding(_ transcript: Transcript, samples: [Float]) -> (kept: Transcript, dropped: [TranscriptSegment]) {
+        var segments = transcript.segments
+        var dropped: [TranscriptSegment] = []
+        // Only after other text: a whole clip that's silent is isLongNearSilentClip's job.
+        while segments.count >= 2, let last = segments.last {
+            let text = PythonText.strip(last.text)
+            if text.isEmpty {
+                // Whisper's empty segments carry nothing; look past them.
+                segments.removeLast()
+                continue
+            }
+            guard let first = last.tokenProbs.first, first < endingMaxFirstTokenProb else { break }
+            let start = min(samples.count, max(0, Int(last.startSec * Double(sampleRate))))
+            let grace = isSilenceHallucination(text, phrases: endingPhrases) ? Int(endingGraceSec * Double(sampleRate)) : 0
+            let before = peak(samples[..<start])
+            let after = peak(samples[min(samples.count, start + grace)...])
+            guard after < endingMaxPeak && after < endingMaxPeakRatio * before else { break }
+            dropped.insert(last, at: 0)
+            segments.removeLast()
+        }
+        // Nothing dropped: hand back the original, empty segments and all.
+        return dropped.isEmpty ? (transcript, []) : (Transcript(segments: segments), dropped)
+    }
+
+    private static func peak(_ samples: ArraySlice<Float>) -> Double {
+        Double(samples.reduce(Float(0)) { max($0, abs($1)) })
+    }
+
     /// True when `text` is only Whisper's silence phrases (once or repeated), or is mostly not
     /// Latin letters (punctuation, "!", or a stray "C Надо"; Whisper is told the speech is
     /// English). Only used together with `isLongNearSilentClip`, so a real "Thank you." spoken
     /// at a normal level is still typed.
-    public static func isSilenceHallucination(_ text: String) -> Bool {
+    public static func isSilenceHallucination(_ text: String, phrases silencePhrases: Set<String> = silencePhrases) -> Bool {
         let scalars = text.lowercased().unicodeScalars
         let latin = scalars.filter { ("a"..."z").contains($0) || ("\u{E0}"..."\u{FF}").contains($0) }.count
         let otherLetters = scalars.filter { CharacterSet.letters.contains($0) }.count - latin

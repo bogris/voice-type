@@ -218,17 +218,28 @@ public final class Finaliser: @unchecked Sendable {
                     promptTokens = tokensUsed
                     transcript = result.transcript
                     let raw = result.rawTranscript ?? ""
-                    let guarded = RepetitionLoopGuard.guardLoops(raw, durationSec: levels.durationSec)
-                    if guarded != raw {
+                    let dropped = PythonText.strip(Transcript(segments: result.droppedEnding).text)
+                    if !dropped.isEmpty {
+                        log("Dropped \(pythonRepr(dropped)) Whisper added over the silence at the end")
+                    }
+                    // The loop guard ran on what was left after that.
+                    let kept = result.transcript?.text ?? raw
+                    let guarded = RepetitionLoopGuard.guardLoops(kept, durationSec: levels.durationSec)
+                    if guarded != kept {
                         log(String(format: "Repetition loop %@: %d words from %.1fs → %@", guarded.isEmpty ? "dropped" : "collapsed",
-                                   PythonText.split(raw).count, levels.durationSec, pythonRepr(guarded)))
+                                   PythonText.split(kept).count, levels.durationSec, pythonRepr(guarded)))
                     }
                     text = result.text
-                    update([
+                    var fields: [(key: String, value: JSONValue)] = [
                         ("raw_transcript", .string(raw)),
                         ("decoded_text", .string(text)),
                         ("segments", .array((result.transcript?.segments ?? []).map(Self.segmentJSON))),
-                    ])
+                    ]
+                    // Kept in the recording, so a real word dropped by mistake can be found.
+                    if !result.droppedEnding.isEmpty {
+                        fields.append(("dropped_ending", .array(result.droppedEnding.map(Self.segmentJSON))))
+                    }
+                    update(fields)
                     if result.status == .skippedNearSilent {
                         // Recorded like Python's short-clip skip, with the reason alongside.
                         silencePhrase = true

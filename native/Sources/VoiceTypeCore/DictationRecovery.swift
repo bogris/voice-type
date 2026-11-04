@@ -136,6 +136,9 @@ public final class DictationRecovery: @unchecked Sendable {
                     ("decoded_text", .string(result.text)),
                     ("segments", .array((result.transcript?.segments ?? []).map(Finaliser.segmentJSON))),
                 ])
+                if !result.droppedEnding.isEmpty {
+                    fields.append(("dropped_ending", .array(result.droppedEnding.map(Finaliser.segmentJSON))))
+                }
                 if result.status == .skippedNearSilent {
                     fields.append(contentsOf: [("status", .string("skipped_low_level")), ("skip_reason", .string("long_near_silent"))])
                 } else if text.isEmpty {

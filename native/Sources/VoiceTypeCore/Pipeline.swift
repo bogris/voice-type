@@ -93,21 +93,27 @@ public struct DictationResult: Sendable {
     public var rawTranscript: String?
     /// What would be typed. Empty when nothing would be.
     public var text: String
+    /// Whisper's segments, less any it made up at the end (`droppedEnding`).
     public var transcript: Transcript?
+    /// Segments Whisper made up over the silence at the end, which `rawTranscript` still
+    /// has and `text` doesn't. See AudioGate.droppingSilentEnding.
+    public var droppedEnding: [TranscriptSegment]
 
-    public init(status: Status, levels: AudioLevels, rawTranscript: String? = nil, text: String, transcript: Transcript? = nil) {
+    public init(status: Status, levels: AudioLevels, rawTranscript: String? = nil, text: String, transcript: Transcript? = nil, droppedEnding: [TranscriptSegment] = []) {
         self.status = status
         self.levels = levels
         self.rawTranscript = rawTranscript
         self.text = text
         self.transcript = transcript
+        self.droppedEnding = droppedEnding
     }
 }
 
 /// Everything between key-up and typing, in the order voice-type.py does it: the flatline and
 /// near-silence gates, the 0.3 s minimum, Whisper, the repetition loop guard, corrections.
-/// Native adds one check after Whisper, for silent clips of a second or more that it turned
-/// into "Thank you.".
+/// Native adds two checks after Whisper: one drops a "Thank you." or "Okay." it made up over
+/// the pause at the end of a dictation, the other silent clips of a second or more that it
+/// turned into "Thank you.".
 public struct DictationPipeline {
     public var engine: SpeechEngine
     public var settings: VoiceTypeSettings
@@ -144,11 +150,12 @@ public struct DictationPipeline {
     /// second or more that stayed near silent is dropped here if Whisper only produced one of
     /// its silence phrases, so a quiet real "Sure." still gets typed.
     public func transcribe(_ samples: [Float], levels: AudioLevels) throws -> DictationResult {
-        let transcript = try engine.transcribe(samples, options: options)
-        let raw = transcript.text
-        let guarded = RepetitionLoopGuard.guardLoops(raw, durationSec: levels.durationSec)
+        let whole = try engine.transcribe(samples, options: options)
+        let raw = whole.text
+        let (transcript, droppedEnding) = AudioGate.droppingSilentEnding(whole, samples: samples)
+        let guarded = RepetitionLoopGuard.guardLoops(transcript.text, durationSec: levels.durationSec)
         if AudioGate.isLongNearSilentClip(durationSec: levels.durationSec, peak: levels.peak) && AudioGate.isSilenceHallucination(guarded) {
-            return DictationResult(status: .skippedNearSilent, levels: levels, rawTranscript: raw, text: "", transcript: transcript)
+            return DictationResult(status: .skippedNearSilent, levels: levels, rawTranscript: raw, text: "", transcript: transcript, droppedEnding: droppedEnding)
         }
         let text = settings.corrections.apply(guarded)
         return DictationResult(
@@ -156,7 +163,8 @@ public struct DictationPipeline {
             levels: levels,
             rawTranscript: raw,
             text: text,
-            transcript: transcript
+            transcript: transcript,
+            droppedEnding: droppedEnding
         )
     }
 
