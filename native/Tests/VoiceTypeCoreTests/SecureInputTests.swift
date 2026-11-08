@@ -28,8 +28,8 @@ struct SecureInputTests {
     }
 
     @Test func namesTheAppForTheMenu() {
-        #expect(chrome.blocking == "Google Chrome is blocking keys (a password box has focus)")
-        #expect(SecureInputHolder(pid: nil, name: nil).blocking == "Another app is blocking keys (a password box has focus)")
+        #expect(chrome.blocking == "Google Chrome is blocking keys (Secure Input is on)")
+        #expect(SecureInputHolder(pid: nil, name: nil).blocking == "Another app is blocking keys (Secure Input is on)")
         #expect(SecureInputHolder(pid: 12, name: nil).description == "pid 12")
         #expect(SecureInputHolder(pid: nil, name: nil).description == "an unknown app")
     }

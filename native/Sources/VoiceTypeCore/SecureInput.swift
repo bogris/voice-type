@@ -25,8 +25,9 @@ public struct SecureInputHolder: Equatable, Sendable, CustomStringConvertible {
         }
     }
 
-    /// For the menu and the status file.
-    public var blocking: String { "\(name ?? "Another app") is blocking keys (a password box has focus)" }
+    /// For the menu and the status file. Not always a password box: Terminal and iTerm's
+    /// Secure Keyboard Entry hold it at an ordinary prompt too, so this doesn't claim one.
+    public var blocking: String { "\(name ?? "Another app") is blocking keys (Secure Input is on)" }
 }
 
 /// Remembers who held Secure Input at the last check, so the log gets one line each time it

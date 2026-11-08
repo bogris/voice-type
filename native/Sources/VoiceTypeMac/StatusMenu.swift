@@ -82,9 +82,15 @@ final class StatusMenu: NSObject, NSMenuDelegate {
         }
         if status.state == "idle" && status.enabled && status.keysBlockedBy != nil {
             // macOS Secure Input: the tap sees nothing until the app lets go, so say what to do.
-            let info = NSMenuItem(title: "F12 and Right Control go to that app until you click out of the password box.", action: nil, keyEquivalent: "")
-            info.isEnabled = false
-            menu.addItem(info)
+            // Usually a focused password box, but a terminal's Secure Keyboard Entry holds it
+            // at any prompt, and clicking around in the terminal doesn't let go.
+            for line in ["F12 and Right Control go to that app until it lets go.",
+                         "Usually a password box: click out of it or close the tab.",
+                         "In a terminal, turn off Secure Keyboard Entry in its menu."] {
+                let info = NSMenuItem(title: line, action: nil, keyEquivalent: "")
+                info.isEnabled = false
+                menu.addItem(info)
+            }
         }
         if recovered > 0 {
             let item = NSMenuItem(title: recovered == 1 ? "Recovered a Dictation..." : "Recovered \(recovered) Dictations...",
