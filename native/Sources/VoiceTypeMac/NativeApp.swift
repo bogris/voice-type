@@ -68,6 +68,8 @@ public final class NativeApp: NSObject, NSApplicationDelegate {
     // needs_attention), and how long it has been ready, to clear the restart history.
     private var appState: (state: String, message: String)?
     private var readySince: Double?
+    /// On statusQueue: who holds macOS Secure Input, which keeps every key from the tap.
+    private var secureInput = SecureInputWatch()
     private var historyCleared = false
 
     /// launchd only sets XPC_SERVICE_NAME on the process it started, so this tells a managed
@@ -243,6 +245,16 @@ public final class NativeApp: NSObject, NSApplicationDelegate {
                                      })
         stallDetector = detector
         repeating(every: 5, on: housekeeping) { detector.check() }
+        repeating(every: 1, on: statusQueue) { [weak self] in self?.checkSecureInput() }
+        publish(nil)
+    }
+
+    /// While an app holds Secure Input (a password box with focus) the tap gets no keys at
+    /// all, so F12 goes to the front app and it beeps, and Voice Type can't see the press. All
+    /// it can do is notice and say so in the menu. On statusQueue.
+    private func checkSecureInput() {
+        guard let change = secureInput.update(SecureInputProbe.holder()) else { return }
+        logFile.log(change)
         publish(nil)
     }
 
@@ -428,6 +440,7 @@ public final class NativeApp: NSObject, NSApplicationDelegate {
             status.hotkeyListener = tapStatus
             status.permissions = Permission.summary
             status.pasteboardAccess = GeneralPasteboard.accessBehavior
+            status.keysBlockedBy = secureInput.holder?.blocking
             status.version = version
             status.updatedAt = Timestamp(Date()).utcISOFormat
             var shown = status

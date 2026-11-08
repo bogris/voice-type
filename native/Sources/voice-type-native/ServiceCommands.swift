@@ -37,6 +37,7 @@ struct ServiceCommands {
         say("  microphone: \(native.microphone.isEmpty ? "none yet" : native.microphone) (preferred: \(native.preferredMicrophone.isEmpty ? "System Default" : native.preferredMicrophone))")
         say("  permissions: \(native.permissions.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: ", "))")
         say("  clipboard access: \(native.pasteboardAccess)")
+        if let blocked = native.keysBlockedBy { say("  secure input: \(blocked)") }
         if let last = native.lastDictation {
             say("  last dictation: \(last.at), \(last.status), \(String(format: "%.1f", last.seconds)) s, \(last.words) words, landed: \(last.landed.map { $0 ? "yes" : "no" } ?? "n/a")")
         }

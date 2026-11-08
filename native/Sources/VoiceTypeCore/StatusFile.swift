@@ -23,6 +23,10 @@ public struct NativeStatus: Codable, Equatable, Sendable {
     /// always_deny. macOS 26 can ask before letting an app read the clipboard.
     public var pasteboardAccess: String
     public var lastDictation: LastDictation?
+    /// Set while another app holds macOS Secure Input, so the keyboard tap gets no keys:
+    /// "Google Chrome is blocking keys (a password box has focus)". Left out of the file when
+    /// nothing holds it. The state stays idle, since nothing is wrong with Voice Type itself.
+    public var keysBlockedBy: String?
     public var version: String
     public var updatedAt: String
 
@@ -75,6 +79,7 @@ public struct NativeStatus: Codable, Equatable, Sendable {
         case finalizeInFlight = "finalize_in_flight"
         case pasteboardAccess = "pasteboard_access"
         case lastDictation = "last_dictation"
+        case keysBlockedBy = "keys_blocked_by"
         case updatedAt = "updated_at"
     }
 

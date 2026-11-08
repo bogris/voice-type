@@ -39,7 +39,7 @@ final class StatusMenu: NSObject, NSMenuDelegate {
         switch status.state {
         case "recording": symbol = "mic.fill"
         case "finalising": symbol = "ellipsis.circle"
-        case "idle": symbol = status.enabled ? "mic" : "mic.slash"
+        case "idle": symbol = !status.enabled ? "mic.slash" : status.keysBlockedBy != nil ? "lock" : "mic"
         case "waiting_for_lock": symbol = "mic.slash"
         case "waiting_for_permission", "needs_model", "needs_attention": symbol = "exclamationmark.triangle"
         default: symbol = "hourglass"
@@ -51,7 +51,7 @@ final class StatusMenu: NSObject, NSMenuDelegate {
 
     static func describe(_ status: NativeStatus) -> String {
         switch status.state {
-        case "idle": return status.enabled ? "Ready" : "Paused"
+        case "idle": return !status.enabled ? "Paused" : status.keysBlockedBy ?? "Ready"
         case "recording": return "Recording"
         case "finalising": return "Transcribing"
         case "waiting_for_lock": return "Another copy of Voice Type Native is running"
@@ -79,6 +79,12 @@ final class StatusMenu: NSObject, NSMenuDelegate {
             let retry = NSMenuItem(title: "Try Again", action: #selector(tryAgain), keyEquivalent: "")
             retry.target = self
             menu.addItem(retry)
+        }
+        if status.state == "idle" && status.enabled && status.keysBlockedBy != nil {
+            // macOS Secure Input: the tap sees nothing until the app lets go, so say what to do.
+            let info = NSMenuItem(title: "F12 and Right Control go to that app until you click out of the password box.", action: nil, keyEquivalent: "")
+            info.isEnabled = false
+            menu.addItem(info)
         }
         if recovered > 0 {
             let item = NSMenuItem(title: recovered == 1 ? "Recovered a Dictation..." : "Recovered \(recovered) Dictations...",
