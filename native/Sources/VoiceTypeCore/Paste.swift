@@ -104,6 +104,11 @@ public struct FocusReading: Equatable, Sendable {
 
     public static func classify(role: String?, valueSettable: Bool) -> FocusKind {
         guard let role, !role.isEmpty else { return .unknown }
+        // Apps that draw their own UI (GPUI ones like Ghostex and Zed) expose nothing below
+        // the window, so their text box reads as the window itself. That says nothing about
+        // where the paste went: Ghostex read the clipboard every time it was
+        // flagged (9 Nov 2026), so trust the read as for an app that reports no focus.
+        if role == "AXWindow" { return .unknown }
         return editableRoles.contains(role) || valueSettable ? .editable : .notEditable
     }
 

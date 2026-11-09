@@ -583,6 +583,8 @@ struct PasterTests {
             #expect(FocusReading.classify(role: role, valueSettable: false) == .notEditable)
         }
         #expect(FocusReading.classify(role: nil, valueSettable: false) == .unknown)
+        // GPUI apps (Ghostex) show nothing below the window, text box included.
+        #expect(FocusReading.classify(role: "AXWindow", valueSettable: false) == .unknown)
     }
 
     @Test func waitsForAnAppToMoveThePasteIntoItsTextBox() {
