@@ -71,7 +71,7 @@ final class StatusMenu: NSObject, NSMenuDelegate {
         menu.addItem(state)
         if ["retrying", "needs_attention"].contains(status.state) && !status.message.isEmpty {
             // What went wrong, and that F12 and Right Control work as normal keys meanwhile.
-            for line in [status.message, "F12 and Right Control work as normal keys until then."] {
+            for line in [status.message, "Your shortcut keys work normally until then."] {
                 let info = NSMenuItem(title: line, action: nil, keyEquivalent: "")
                 info.isEnabled = false
                 menu.addItem(info)
@@ -84,7 +84,7 @@ final class StatusMenu: NSObject, NSMenuDelegate {
             // macOS Secure Input: the tap sees nothing until the app lets go, so say what to do.
             // Usually a focused password box, but a terminal's Secure Keyboard Entry holds it
             // at any prompt, and clicking around in the terminal doesn't let go.
-            for line in ["F12 and Right Control go to that app until it lets go.",
+            for line in ["Your shortcut keys go to that app until it lets go.",
                          "Usually a password box: click out of it or close the tab.",
                          "In a terminal, turn off Secure Keyboard Entry in its menu."] {
                 let info = NSMenuItem(title: line, action: nil, keyEquivalent: "")

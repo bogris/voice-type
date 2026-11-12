@@ -287,6 +287,7 @@ final class ControllerHarness: @unchecked Sendable {
     let executor = ManualExecutor()
     let catalog: FakeCatalog
     let factory = FakeStreamFactory()
+    let meetingFactory = FakeStreamFactory()
     let probe: FakeProbe
     let engine = ScriptedEngine(["Port it to kuda."])
     let transcriber: FakeTranscriber
@@ -314,7 +315,7 @@ final class ControllerHarness: @unchecked Sendable {
     init(devices: [InputDevice] = [InputDevice(id: 1, name: "MacBook Pro Microphone"), InputDevice(id: 2, name: "Yeti Stereo Microphone")],
          settings: JSONValue = .object([("audio_recording_enabled", .bool(true)), ("vocabulary", .strings(["Convex"]))]),
          readinessLane: ManualExecutor? = nil, finaliseLane: ManualExecutor? = nil, marks: MarkSessions? = nil,
-         spool: Bool = false, recovery: Bool = false,
+         spool: Bool = false, recovery: Bool = false, meeting: Bool = false,
          beforeStart: (URL) throws -> Void = { _ in }) throws {
         self.marks = marks
         catalog = FakeCatalog(devices, default: devices.first)
@@ -353,6 +354,8 @@ final class ControllerHarness: @unchecked Sendable {
                 return OperationWatchdog(name: name, timeout: 86_400 * 365, onTimeout: {})
             },
             marks: marks, spool: self.spool, recovery: self.recovery,
+            meetingRecorder: meeting ? Recorder(catalog: FakeCatalog([InputDevice(id: 99, name: "Meeting audio")]), factory: meetingFactory,
+                                                 log: log, bounded: { _, work in work(); return true }) : nil,
             recovered: { [unowned self] in self.recovered.append(contentsOf: $0) }
         )
         controller = DictationController(ports: ports)

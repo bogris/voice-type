@@ -29,6 +29,8 @@ public struct ControllerSnapshot: Equatable, Sendable {
 /// Every method has to be called on `ports.queue`. Slow work goes elsewhere: readiness on its
 /// own lane, the final pass and the paste on the finalise lane, whisper on its own thread.
 public final class DictationController: @unchecked Sendable {
+    public enum AudioSource: String, Sendable { case microphone, systemAudio = "system_audio" }
+
     public enum Phase: String, Sendable {
         /// Checking the microphone, loading or warming the model, or reconnecting audio.
         case starting
@@ -45,6 +47,7 @@ public final class DictationController: @unchecked Sendable {
     /// Closures and objects the controller only touches on its own queue (or that are
     /// thread-safe themselves), which Swift can't see, hence the unchecked Sendable.
     public struct Ports: @unchecked Sendable {
+        public var meetingRecorder: Recorder?
         public var recorder: Recorder
         public var transcriber: Transcribing
         public var readiness: MicrophoneReadiness
@@ -81,7 +84,8 @@ public final class DictationController: @unchecked Sendable {
                     finaliseLane: Executor, readinessLane: Executor,
                     makeWatchdog: @escaping (String, Double, @escaping @Sendable () -> Void) -> OperationWatchdog,
                     marks: MarkSessions? = nil, spool: RecordingSpool? = nil, recovery: DictationRecovery? = nil,
-                    recovered: @escaping ([RecoveredDictation]) -> Void = { _ in }) {
+                    meetingRecorder: Recorder? = nil, recovered: @escaping ([RecoveredDictation]) -> Void = { _ in }) {
+            self.meetingRecorder = meetingRecorder
             self.recorder = recorder
             self.transcriber = transcriber
             self.readiness = readiness
@@ -139,6 +143,9 @@ public final class DictationController: @unchecked Sendable {
     private var settings: SettingsFile
     private var settingsDate: Date?
 
+    private var audioSource: AudioSource = .microphone
+    private var activeRecorder: Recorder { audioSource == .systemAudio ? ports.meetingRecorder! : ports.recorder }
+    private var recordingLabel: String { audioSource == .systemAudio ? "Meeting audio" : "" }
     private var keyDown = false
     private var forcedStop = false
     private var noticeRevealed = false
@@ -183,8 +190,13 @@ public final class DictationController: @unchecked Sendable {
             guard let self else { return }
             self.ports.queue.run { self.firstAudio() }
         }
+        ports.meetingRecorder?.onFirstAudio = { [weak self] in
+            guard let self else { return }
+            self.ports.queue.run { self.firstAudio() }
+        }
         if let spool = ports.spool {
             ports.recorder.onRecordedAudio = { spool.append($0) }
+            ports.meetingRecorder?.onRecordedAudio = { spool.append($0) }
         }
     }
 
@@ -359,7 +371,7 @@ public final class DictationController: @unchecked Sendable {
             noticeRevealed = false
             ports.pill.hide()
         }
-        ports.log("Ready. Hold F12 or Right Ctrl to record.")
+        ports.log("Ready. Hold your microphone or meeting audio shortcut to record.")
         publish()
         runPendingIdleWork()
     }
@@ -367,7 +379,13 @@ public final class DictationController: @unchecked Sendable {
     // MARK: The hotkey
 
     /// From the event tap, via the queue: F12 or Right Control changed.
-    public func hotkeyChanged(down: Bool) {
+    public func hotkeyChanged(down: Bool, source: AudioSource = .microphone) {
+        if phase == .recording || forcedStop || lastStartFailed {
+            guard source == audioSource else { return }
+        } else if down && phase == .idle {
+            guard source != .systemAudio || ports.meetingRecorder != nil else { return }
+            audioSource = source
+        } else if !down && source != audioSource { return }
         keyDown = down
         if down {
             switch phase {
@@ -417,20 +435,27 @@ public final class DictationController: @unchecked Sendable {
         // Drawing still never starts for a key-down that can't dictate: every gate (paused,
         // starting, no model, finalising, drawing off) has passed by now, and the microphone,
         // the one thing left that can fail, abandons the session below.
-        let marks = settings.drawOnScreenEnabled ? ports.marks : nil
+        let marks = audioSource == .microphone && settings.drawOnScreenEnabled ? ports.marks : nil
         marks?.begin(wordTimings: settings.markerTimings == .accurate)
         // Before the microphone, so the spool is there for the very first block. Only when
         // recordings are kept: it's the same audio, written sooner.
         let spooled = settings.audioRecordingEnabled ? ports.spool?.begin() : nil
-        let result = ports.recorder.start()
+        let result = activeRecorder.start()
         let ready = ports.now() - downSince
         guard case let .started(reused) = result else {
             marks?.abandon()
             if let spooled { ports.spool?.discard(spooled) }
             if case let .failed(why) = result {
-                ports.log("Microphone stream could not open: \(why). Voice Type will reconnect the microphone.")
+                ports.log(audioSource == .systemAudio ? "Meeting audio stream could not open: \(why)." : "Microphone stream could not open: \(why). Voice Type will reconnect the microphone.")
             }
             lastStartFailed = true
+            if audioSource == .systemAudio {
+                activeRecorder.close()
+                ports.pill.showProcessing("Meeting audio unavailable. Allow System Audio Recording in System Settings, and check the selected meeting app.")
+                ports.log("Meeting audio capture could not start; microphone settings were left unchanged.")
+                if activeRecorder.restartRequired { ports.restartProcess("System audio capture hung inside Core Audio") }
+                return
+            }
             ports.pill.hide()
             if ports.recorder.restartRequired {
                 ports.restartProcess("microphone stream could not open; relaunching the Core Audio backend")
@@ -457,6 +482,7 @@ public final class DictationController: @unchecked Sendable {
         capTimer = ports.queue.schedule(after: Deadlines.maxRecording) { [weak self] in self?.capReached(gen) }
         countdown(gen, from: Self.capCountdownSeconds, capAt: capAt)
         schedulePreview(gen)
+        if audioSource == .systemAudio { ports.pill.showRecording(recordingLabel) }
         publish()
     }
 
@@ -464,7 +490,7 @@ public final class DictationController: @unchecked Sendable {
         guard phase == .recording, var active = recording, active.firstAudioDelay == nil else { return }
         active.firstAudioDelay = ports.now() - active.downSince
         recording = active
-        ports.pill.showRecording("")
+        ports.pill.showRecording(recordingLabel)
     }
 
     /// Schedules the pill's "10s", "9s", ... up to the cap, one second apart.
@@ -493,11 +519,11 @@ public final class DictationController: @unchecked Sendable {
 
     private func previewTick(_ gen: Int) {
         guard phase == .recording, gen == generation, let active = recording else { return }
-        let samples = ports.recorder.snapshot()
+        let samples = activeRecorder.snapshot()
         if AudioGate.isMissingAudio(sampleCount: samples.count, keyHoldSeconds: ports.now() - active.downSince) {
             // The stream started but nothing has come: say so now rather than at key-up,
             // which reconnects the microphone.
-            ports.pill.showRecording(AudioGate.nativeFlatlineRecordingMessage)
+            ports.pill.showRecording(audioSource == .systemAudio ? "Meeting audio: waiting for sound" : AudioGate.nativeFlatlineRecordingMessage)
             schedulePreview(gen)
             return
         }
@@ -510,7 +536,7 @@ public final class DictationController: @unchecked Sendable {
             // Whisper turns a stream of zeros into "Thank you." Keep that out of the preview;
             // key-up sees the same zeros and reconnects the microphone.
             lastPreview = ""
-            ports.pill.showRecording(AudioGate.nativeFlatlineRecordingMessage)
+            ports.pill.showRecording(audioSource == .systemAudio ? "Meeting audio: waiting for sound" : AudioGate.nativeFlatlineRecordingMessage)
             schedulePreview(gen)
             return
         }
@@ -533,7 +559,7 @@ public final class DictationController: @unchecked Sendable {
                 lastPreview = ""
             } else {
                 lastPreview = text
-                ports.pill.showRecording(PreviewFormat.wrap(text))
+                ports.pill.showRecording(recordingLabel.isEmpty ? PreviewFormat.wrap(text) : recordingLabel + "\n" + PreviewFormat.wrap(text))
             }
         }
         schedulePreview(gen)
@@ -546,7 +572,7 @@ public final class DictationController: @unchecked Sendable {
         capTimer?.cancel()
         countdownTimer?.cancel()
         previewTimer?.cancel()
-        let marks = ports.marks?.finish()
+        let marks = audioSource == .microphone ? ports.marks?.finish() : nil
         ports.log("--- Key UP ---")
         // One line for the dictation's live preview, rather than one every half second, which
         // filled the log now that native no longer restarts (and rotates it) at every wake.
@@ -558,7 +584,7 @@ public final class DictationController: @unchecked Sendable {
         ports.transcriber.beginFinal()
         let keyUpAt = ports.now()
         let keyHold = keyUpAt - active.downSince
-        let samples = ports.recorder.stop()
+        let samples = activeRecorder.stop()
         let stopTook = ports.now() - keyUpAt
         // The last block came in before stop() returned. The file stays until the finaliser
         // has saved the recording.
@@ -571,7 +597,7 @@ public final class DictationController: @unchecked Sendable {
             ("mode", .string(Finaliser.mode)),
             ("final_model", .string("large-v3-turbo")),
             ("stream_model", .string("large-v3-turbo")),
-            ("microphone", .string(ports.recorder.actualDeviceName)),
+            ("microphone", .string(activeRecorder.actualDeviceName)),
             ("preferred_microphone", s.json["microphone_name"] ?? .string(SettingsFile.defaultMicrophoneName)),
             ("key_hold_seconds", .double(keyHold)),
             ("capture_ready_delay_seconds", .double(active.captureReadyDelay)),
@@ -579,6 +605,10 @@ public final class DictationController: @unchecked Sendable {
             ("formatter_enabled", .bool(false)),
             ("vocabulary", s.vocabularyForRecording),
         ]
+        if audioSource == .systemAudio {
+            metadata.append(("audio_source", .string(audioSource.rawValue)))
+            metadata.append(("meeting_app_bundle_id", .string(s.meetingAppBundleID)))
+        }
         if let marks { metadata.append(("mark_count", .int(marks.strokes.count))) }
         metadata.append(("app", .string("native")))
         metadata.append(("engine", .string(Finaliser.engineName)))
@@ -606,7 +636,7 @@ public final class DictationController: @unchecked Sendable {
         }
         // Normally nothing to do: the stream is kept for the next key-down. Reopens it if a
         // device change made it stale meanwhile.
-        ports.recorder.prepare()
+        if audioSource == .systemAudio { activeRecorder.close() } else { ports.recorder.prepare() }
         publish()
     }
 
@@ -619,6 +649,13 @@ public final class DictationController: @unchecked Sendable {
         phase = .idle
         if ports.recorder.restartRequired {
             ports.restartProcess("Core Audio capture needs recovery; relaunching before another microphone stream is opened")
+            return
+        }
+        if audioSource == .systemAudio {
+            if activeRecorder.restartRequired { ports.restartProcess("System audio capture needs recovery"); return }
+            if outcome.flatline { ports.pill.showProcessing("No meeting audio. Check playback and System Audio Recording permission.") }
+            publish()
+            runPendingIdleWork()
             return
         }
         if outcome.flatline {

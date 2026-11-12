@@ -8,6 +8,7 @@
 ///
 /// Not thread-safe on its own: the event tap's thread is the only one that calls it.
 public struct HotkeyState: Sendable {
+    public static let f11: Int64 = 103
     public static let f12: Int64 = 111
     public static let rightControl: Int64 = 0x3E
     /// NX_DEVICERCTLKEYMASK: the right Control key is down.
@@ -30,9 +31,19 @@ public struct HotkeyState: Sendable {
     /// Keys whose press went through to the system, so their release does too.
     private var passing: Set<Int64> = []
 
-    public init() {}
+    private let shortcuts: [KeyboardShortcut]
+    private let rightControlEnabled: Bool
+    public init(meeting: Bool = false) {
+        shortcuts = [meeting ? ShortcutConfiguration.defaults.meeting : ShortcutConfiguration.defaults.microphone]
+        rightControlEnabled = !meeting
+    }
+    public init(shortcuts: [KeyboardShortcut], rightControl: Bool = false) {
+        self.shortcuts = shortcuts
+        self.rightControlEnabled = rightControl
+    }
 
     public var isDown: Bool { !down.isEmpty }
+    public func owns(keycode: Int64) -> Bool { down.contains(keycode) }
 
     /// Applies one keyboard event. Returns true when it was one of ours, in which case the
     /// tap swallows it so the rest of the system never sees it (as Python's tap did).
@@ -46,11 +57,21 @@ public struct HotkeyState: Sendable {
     /// was down before the tap started) goes through, since the system saw the press.
     public mutating func handle(_ kind: EventKind, keycode: Int64, flags: UInt64, swallowing: Bool) -> Disposition {
         let physicallyDown: Bool
-        switch (keycode, kind) {
-        case (Self.f12, .keyDown): physicallyDown = true
-        case (Self.f12, .keyUp): physicallyDown = false
-        case (Self.rightControl, .flagsChanged): physicallyDown = flags & Self.deviceRightControlMask != 0
-        default: return .notOurs
+        if keycode == Self.rightControl && rightControlEnabled {
+            guard case .flagsChanged = kind else { return .notOurs }
+            physicallyDown = flags & Self.deviceRightControlMask != 0
+        } else {
+            switch kind {
+            case .keyDown:
+                guard down.contains(keycode) || shortcuts.contains(where: {
+                    $0.keycode == keycode && $0.modifiers == flags & KeyboardShortcut.modifierMask
+                }) else { return .notOurs }
+                physicallyDown = true
+            case .keyUp:
+                guard down.contains(keycode) || shortcuts.contains(where: { $0.keycode == keycode }) else { return .notOurs }
+                physicallyDown = false
+            case .flagsChanged: return .notOurs
+            }
         }
         let wasDown = down.contains(keycode)
         if physicallyDown {

@@ -2,11 +2,18 @@ import Foundation
 
 /// A speech engine the app can drive: whisper.cpp, or a fake in the tests.
 public protocol DictationEngine: SpeechEngine {
+    var supportsPreviews: Bool { get }
+    var transcriptionEngineName: String { get }
     /// Like transcribe(_:options:), but stops early (best effort, between encoder and decoder
     /// steps) once `abort` is set. Only previews pass a flag.
     func transcribe(_ samples: [Float], options: TranscribeOptions, abort: AbortFlag?) throws -> Transcript
     /// The word list prompt's tokens, made the way the benchmark made them.
     func promptTokens(for prompt: String?) -> [Int32]
+}
+
+public extension DictationEngine {
+    var supportsPreviews: Bool { true }
+    var transcriptionEngineName: String { Finaliser.engineName }
 }
 
 public struct EngineNotReady: LocalizedError {
@@ -141,7 +148,7 @@ public final class InferenceWorker: @unchecked Sendable {
     /// `completion` gets nil when the preview was dropped or aborted.
     public func preview(_ samples: [Float], prompt: String?, completion: @escaping (Transcript?) -> Void) {
         condition.withLock {
-            guard !finalRequested else {
+            guard !finalRequested, engine?.supportsPreviews != false else {
                 completion(nil)
                 return
             }
@@ -186,6 +193,7 @@ public final class InferenceWorker: @unchecked Sendable {
             log("The last word timing pass is still running; placing markers with the final pass's token timestamps.")
             return .finished(nil)
         }
+        let timingPrompt = condition.withLock { engine?.supportsPreviews == false ? promptCache?.prompt : nil }
         let pass = WordTimingPass(timeout: timeout) { [weak self] in self?.noteTimingOverrun() }
         enqueueTiming { [self] in
             // Out of time (or not needed) before it got the thread.
@@ -194,7 +202,7 @@ public final class InferenceWorker: @unchecked Sendable {
                 return
             }
             do {
-                pass.finish(try timing.transcribe(samples, options: TranscribeOptions(promptTokens: promptTokens, wordTimings: true), abort: pass.abort))
+                pass.finish(try timing.transcribe(samples, options: TranscribeOptions(promptTokens: timingPrompt.map { timing.promptTokens(for: $0) } ?? promptTokens, wordTimings: true), abort: pass.abort))
             } catch {
                 if !pass.abort.isSet { log("Word timing pass failed: \(error.localizedDescription)") }
                 pass.finish(nil)

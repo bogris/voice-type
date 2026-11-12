@@ -36,11 +36,51 @@ It never signs ad hoc. An ad hoc signature ties macOS's permission grants to tha
 
 `native/scripts/build-app.sh --test-build DIR` is for testing only: it builds and ad hoc signs the app into DIR and writes the LaunchAgent there to look at, without touching the keychain, `~/Applications`, `~/Library/LaunchAgents`, Voice Type's data or launchctl. Don't install what it makes.
 
+## Personal builds
+
+To install this fork using your own Xcode team, run:
+
+```sh
+native/scripts/build-app.sh --personal
+```
+
+The script selects your valid Apple Development certificate when exactly one is available. If you have several, choose the full certificate name printed by the script:
+
+```sh
+native/scripts/build-app.sh --personal "Apple Development: Your Name (TEAMID)"
+```
+
+If no certificate is available, create an Apple Development certificate for your team in Xcode on the Mac where you build. Personal builds keep the app name, bundle identifier, LaunchAgent and data formats. The first installation with your certificate needs its own macOS permission grants. Reuse that certificate for later builds. It never falls back to ad hoc signing. Running without `--personal` still requires the original author's certificate.
+
 ## First run
 
 1. Run `native/scripts/build-app.sh`. The first time it signs, macOS asks to use the signing key in your keychain: enter your password and choose Always Allow. The script then starts the app from its LaunchAgent.
 2. If a permission it needs is missing, the app opens its settings on the Permissions tab. Grant Accessibility and Input Monitoring with their buttons (each adds Voice Type Native to the list in System Settings, where you switch it on), and click Ask now for the microphone. If there's something on your clipboard, click Check now next to Paste from other apps: macOS 26 may ask whether Voice Type Native can read the clipboard, and you want Allow, since it copies your clipboard before pasting so it can put it back afterwards. The keyboard tap is retried every 2 seconds, so dictation starts working as soon as the grants are done.
 3. Hold F12 or Right Control and talk. The pill comes up red as soon as audio arrives, shows the live preview, turns orange while Whisper finishes and green with the word count when the text lands. "On your clipboard" means no text box took it, so Cmd+V it yourself. If the focus was on a button, a link or a tab instead, the pill says so: click the text box, then Cmd+V. The log has a line for every paste that wasn't read, with what had focus, which app was in front and whether Voice Type's main thread was answering.
+
+## Keyboard shortcuts
+
+In Settings > General, choose a key and modifiers separately for **Microphone** and **Meeting audio**, then click **Save Shortcuts**. Command, Option, Control and Shift combinations work, such as Command+Shift+D for your voice and Command+Shift+M for meeting audio. Letters, numbers and Space require Command, Option or Control so ordinary typing keeps working. Choose combinations that your other apps do not use.
+
+Changes apply without restarting. Hold the chosen shortcut to record, then release its main key to paste. If you release a modifier first, releasing the main key still stops recording. Defaults are F12 for microphone, F11 for meeting audio, and an optional Right Control microphone shortcut for external keyboards. You can disable that extra shortcut or restore all defaults from Settings. Function keys may still require Fn or Globe on a MacBook. Letter names refer to physical US keyboard positions.
+
+## Meeting audio
+
+Hold your meeting audio shortcut (**F11** by default) while someone in a meeting speaks, then release it to transcribe and paste their words. Focus your agent's text box before pressing the shortcut. F12 and Right Control still capture your own microphone. On keyboards using F11 for a media or system function, you may need Fn+F11.
+
+In Settings > General, choose **All system audio** or a running app under **Meeting audio source**. Click **Refresh Apps** if you just opened the meeting app. Source changes apply to the next recording without restarting. Browser capture can include other tabs, and all-system capture can include music and notifications.
+
+The app copies playback with a native Core Audio tap. You keep hearing it through your current headphones or speakers; it does not change your meeting's input or output devices. macOS asks for System Audio Recording permission on first use. If capture is unavailable, grant it under System Settings > Privacy & Security > Screen & System Audio Recording. The settings window has a shortcut to that pane.
+
+The pill identifies meeting capture. Only one source records at a time: the first shortcut held owns the clip, and the other shortcut cannot stop it. Meeting clips use the selected transcription provider, vocabulary, corrections, history and recording-retention setting, with the same 120-second safety cap. Drawing is available during microphone dictation only. There is no recording before you press the meeting shortcut and no recent-audio buffer.
+
+## OpenAI transcription
+
+In Settings > General, select **GPT Live Transcribe (OpenAI)**, enter an OpenAI API key and click **Save API Key**, then restart Voice Type. Choose **Whisper (local)** and restart to return to local dictation. Existing settings default to Whisper.
+
+The OpenAI option uses `gpt-live-transcribe` through the [Realtime transcription API](https://developers.openai.com/api/docs/guides/realtime-transcription). It uploads each clip after you release the key and pastes the completed transcript. It requires internet, model access and a paid OpenAI API account. It does not show live transcript previews while you speak. Your vocabulary and corrections still apply. The key is stored in macOS Keychain, separate from settings, recordings and logs. Saving a blank key removes it.
+
+OpenAI does not provide word timestamps for this model. Accurate screen markers use the local Whisper timing model when available; rough markers use the app's existing approximate placement. The local model remains useful even when OpenAI handles transcription. Command line transcription continues to use local Whisper.
 
 ## Running it
 

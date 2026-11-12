@@ -8,6 +8,11 @@
 #       enabled and running: a running app restarts into the new build once it's idle, and
 #       one that isn't running (or has never been installed) is started.
 #
+#   native/scripts/build-app.sh --personal ["Apple Development: Your Name (TEAMID)"]
+#       Installs using your own valid Apple Development certificate. With one available
+#       certificate it is selected automatically; with several, name the certificate.
+#       Reuse the same certificate for later builds to keep macOS permission grants.
+#
 #   native/scripts/build-app.sh --test-build DIR
 #       FOR TESTING ONLY. Builds and ad hoc signs the app into DIR and writes the LaunchAgent
 #       there for inspection. It never touches the keychain, ~/Applications,
@@ -38,18 +43,25 @@ REPO_DIR="$(cd "$NATIVE_DIR/.." && pwd)"
 
 mode="install"
 out_dir=""
+personal=false
+personal_identity=""
 case "${1:-}" in
   "") ;;
+  --personal)
+    personal=true
+    personal_identity="${2:-}"
+    [[ $# -le 2 ]] || { echo "usage: $0 --personal [SIGNING_IDENTITY]" >&2; exit 2; }
+    ;;
   --test-build)
     mode="test"
     out_dir="${2:?--test-build needs a folder}"
     ;;
   -h|--help)
-    sed -n '2,24p' "$0"
+    sed -n '2,/^set -euo pipefail/p' "$0" | sed '$d'
     exit 0
     ;;
   *)
-    echo "usage: $0 [--test-build DIR]" >&2
+    echo "usage: $0 [--personal [SIGNING_IDENTITY] | --test-build DIR]" >&2
     exit 2
     ;;
 esac
@@ -61,11 +73,34 @@ version="0.1.0"
 build_number="$(git -C "$REPO_DIR" rev-list --count HEAD 2>/dev/null || echo 1)"
 commit="$(git -C "$REPO_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 
-# Fail before building if the identity isn't there, rather than signing ad hoc.
+# Only explicit personal installs may select a different certificate. Never use an ad hoc
+# identity for installation, including when a personal certificate is missing or ambiguous.
 if [[ "$mode" == "install" ]]; then
-  if ! security find-identity -v -p codesigning | grep -qF "\"$IDENTITY\""; then
-    die "the signing identity \"$IDENTITY\" isn't in the keychain. Not signing ad hoc, since that would lose the app's permissions on every rebuild."
+  signing_identities="$(security find-identity -v -p codesigning)"
+  if [[ "$personal" == true ]]; then
+    personal_candidates=()
+    while IFS= read -r candidate; do
+      [[ -n "$candidate" ]] && personal_candidates+=("$candidate")
+    done < <(sed -n 's/.*"\(Apple Development: [^"]*\)".*/\1/p' <<<"$signing_identities" | sort -u)
+    if [[ -n "$personal_identity" ]]; then
+      found=false
+      for candidate in "${personal_candidates[@]}"; do
+        [[ "$candidate" != "$personal_identity" ]] || found=true
+      done
+      [[ "$found" == true ]] || die "the requested Apple Development certificate isn't available in this Mac's keychain."
+      IDENTITY="$personal_identity"
+    else
+      [[ ${#personal_candidates[@]} -gt 0 ]] || die "no Apple Development certificate found. Create one for your personal team in Xcode, then run with --personal again."
+      if [[ ${#personal_candidates[@]} -gt 1 ]]; then
+        printf 'Available certificates:\n'
+        printf '  %s\n' "${personal_candidates[@]}"
+        die 'several certificates are available. Run --personal "Apple Development: Your Name (TEAMID)" to choose one.'
+      fi
+      IDENTITY="${personal_candidates[0]}"
+    fi
+    say "Personal build: $IDENTITY"
   fi
+  grep -qF "\"$IDENTITY\"" <<<"$signing_identities" || die "the signing identity \"$IDENTITY\" isn't in the keychain. Not signing ad hoc, since that would lose the app's permissions on every rebuild."
 fi
 
 say "Building (release)..."
@@ -128,6 +163,8 @@ cat > "$app/Contents/Info.plist" <<PLIST
   <true/>
   <key>NSHighResolutionCapable</key>
   <true/>
+  <key>NSAudioCaptureUsageDescription</key>
+  <string>Voice Type Native transcribes meeting audio while you hold F11. Audio keeps playing through your headphones or speakers.</string>
   <key>NSMicrophoneUsageDescription</key>
   <string>Voice Type Native listens while you hold F12 or Right Control, and turns what you say into text.</string>
 </dict>

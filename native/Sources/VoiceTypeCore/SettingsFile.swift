@@ -64,6 +64,16 @@ public struct SettingsFile: Sendable {
         return MarkerTimings(rawValue: PythonText.strip(value).lowercased()) ?? .accurate
     }
 
+    public enum TranscriptionProvider: String, Sendable { case whisper, openai }
+    public var transcriptionProvider: TranscriptionProvider {
+        native("transcription_provider")?.stringValue.flatMap(TranscriptionProvider.init(rawValue:)) ?? .whisper
+    }
+
+    /// Empty captures all system audio. Otherwise capture this app's bundle identifier.
+    public var meetingAppBundleID: String { native("meeting_app_bundle_id")?.stringValue ?? "" }
+
+    public var shortcuts: ShortcutConfiguration { ShortcutConfiguration(json: native("shortcuts")) ?? .defaults }
+
     // MARK: The settings window's edits
 
     /// The word list as the settings window edits it: what Whisper is primed with now.

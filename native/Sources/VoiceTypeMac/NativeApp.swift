@@ -296,7 +296,12 @@ public final class NativeApp: NSObject, NSApplicationDelegate {
         let uptime: () -> Double = { ProcessInfo.processInfo.systemUptime }
         let recorder = Recorder(catalog: catalog, factory: CoreAudioStreamFactory(), log: log)
         self.recorder = recorder
+        let provider = SettingsFile.load().transcriptionProvider
         let worker = InferenceWorker(makeEngine: {
+            if provider == .openai {
+                log("Using OpenAI gpt-live-transcribe; audio is uploaded after key release.")
+                return OpenAITranscriptionEngine(apiKey: { try OpenAIKeychain.load() })
+            }
             let path = VoiceTypePaths.defaultModel.path
             guard FileManager.default.fileExists(atPath: path) else { throw ModelFileMissing(path: path) }
             log("Loading final model 'large-v3-turbo' with whisper.cpp on Metal (\(path))...")
@@ -319,7 +324,8 @@ public final class NativeApp: NSObject, NSApplicationDelegate {
             log(String(format: "Word timing model loaded in %.0f ms, warmed in %.0f ms.", engine.loadMilliseconds, (uptime() - started) * 1000))
             return engine
         }, log: log)
-        let pill = MainThreadPill(level: { recorder.level })
+        let meetingRecorder = Recorder(catalog: SystemAudioCatalog(), factory: SystemAudioStreamFactory(), log: log)
+        let pill = MainThreadPill(level: { max(recorder.level, meetingRecorder.level) })
         let paster = Paster(pasteboard: GeneralPasteboard(), environment: MacPasteEnvironment(), now: uptime,
                             sleep: { Thread.sleep(forTimeInterval: $0) }, log: log)
         let archive = RecordingArchive(directory: VoiceTypePaths.recordingsDirectory)
@@ -345,6 +351,7 @@ public final class NativeApp: NSObject, NSApplicationDelegate {
             marks: makeScreenMarking(log: log, onMark: { worker.prepareWordTimings() }),
             spool: RecordingSpool(directory: VoiceTypePaths.recordingsDirectory, log: log),
             recovery: recovery,
+            meetingRecorder: meetingRecorder,
             recovered: { [weak self] found in DispatchQueue.main.async { self?.noteRecovered(found) } }
         )
         controller = DictationController(ports: ports)
@@ -366,7 +373,7 @@ public final class NativeApp: NSObject, NSApplicationDelegate {
         if tap == nil { tap = makeTap() }
         guard let tap, tap.status != .running else { return }
         if tap.start() {
-            log("Keyboard tap installed: hold F12 or Right Control to dictate\(drawing.isAvailable ? ", and drag or click to draw while holding it" : "").")
+            log("Keyboard tap installed: hold your microphone shortcut to dictate\(drawing.isAvailable ? ", and drag or click to draw while holding it" : "").")
             publish(nil)
             return
         }
@@ -379,7 +386,9 @@ public final class NativeApp: NSObject, NSApplicationDelegate {
     }
 
     private func makeTap() -> KeyboardTap {
-        KeyboardTap(drawing: drawing, log: { [logFile] in logFile.log($0) }) { [weak self] down in
+        KeyboardTap(drawing: drawing, log: { [logFile] in logFile.log($0) }, onMeetingChange: { [weak self] down in
+            self?.onController { $0.hotkeyChanged(down: down, source: .systemAudio) }
+        }) { [weak self] down in
             self?.onController { $0.hotkeyChanged(down: down) }
         }
     }
@@ -698,7 +707,8 @@ public final class NativeApp: NSObject, NSApplicationDelegate {
             if settings.serialized != before {
                 do { try settings.save() } catch { self.log("Settings save failed: \(error.localizedDescription)") }
             }
-            let saved = settings
+            let saved = SettingsFile.load()
+            DispatchQueue.main.async { self.tap?.updateShortcuts(saved.shortcuts) }
             if let then { DispatchQueue.main.async { then(saved) } }
         }
     }

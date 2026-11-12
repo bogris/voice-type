@@ -209,11 +209,11 @@ public final class Finaliser: @unchecked Sendable {
                     let samples = job.samples
                     // Word timings only for dictations with marks, to place their markers.
                     let wordTimings = job.marks != nil
-                    let (result, tokensUsed) = try transcriber.run { engine, tokens in
+                    let (result, tokensUsed, engineName) = try transcriber.run { engine, tokens in
                         let prompt = tokens(settings.vocabularyPrompt)
                         return (try DictationPipeline(engine: engine, settings: settings,
                                                       options: TranscribeOptions(promptTokens: prompt, wordTimings: wordTimings))
-                            .transcribe(samples, levels: levels), prompt)
+                            .transcribe(samples, levels: levels), prompt, engine.transcriptionEngineName)
                     }
                     promptTokens = tokensUsed
                     transcript = result.transcript
@@ -231,6 +231,7 @@ public final class Finaliser: @unchecked Sendable {
                     }
                     text = result.text
                     var fields: [(key: String, value: JSONValue)] = [
+                        ("engine", .string(engineName)),
                         ("raw_transcript", .string(raw)),
                         ("decoded_text", .string(text)),
                         ("segments", .array((result.transcript?.segments ?? []).map(Self.segmentJSON))),

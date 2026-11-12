@@ -73,6 +73,17 @@ final class SettingsModel: ObservableObject {
     @Published var microphones: [Microphone] = []
     @Published var keepRecordings = true
     @Published var drawOnScreen = true
+    struct MeetingApp: Identifiable {
+        var id: String
+        var title: String
+    }
+    @Published var shortcuts = ShortcutConfiguration.defaults
+    @Published var shortcutMessage = ""
+    @Published var meetingApp = ""
+    @Published var meetingApps: [MeetingApp] = []
+    @Published var provider = SettingsFile.TranscriptionProvider.whisper
+    @Published var apiKey = ""
+    @Published var keyMessage = ""
     @Published var accurateMarkers = true
     @Published var words: [Word] = []
     @Published var corrections: [Correction] = []
@@ -86,6 +97,10 @@ final class SettingsModel: ObservableObject {
     /// Fills the window from settings.json and the app's status, when it opens.
     func reload(status: NativeStatus) {
         let file = SettingsFile.load()
+        provider = file.transcriptionProvider
+        shortcuts = file.shortcuts
+        meetingApp = file.meetingAppBundleID
+        refreshMeetingApps()
         keepRecordings = file.audioRecordingEnabled
         drawOnScreen = file.drawOnScreenEnabled
         accurateMarkers = file.markerTimings == .accurate
@@ -140,6 +155,53 @@ final class SettingsModel: ObservableObject {
     func chooseMicrophone(_ name: String) {
         microphone = name
         actions.chooseMicrophone(name)
+    }
+
+    func saveShortcuts() {
+        guard shortcuts.isValid else {
+            shortcutMessage = "Choose different shortcuts. Letters, numbers and Space need Command, Option or Control."
+            return
+        }
+        let selected = shortcuts
+        actions.update({ $0.setNative("shortcuts", selected.json) }, { [weak self] saved in
+            self?.shortcutMessage = saved.shortcuts == selected ? "Shortcuts saved. No restart needed." : "Could not save shortcuts."
+        })
+    }
+
+    func refreshMeetingApps() {
+        var apps = NSWorkspace.shared.runningApplications.compactMap { app -> MeetingApp? in
+            guard app.activationPolicy == .regular, let id = app.bundleIdentifier,
+                  id != Bundle.main.bundleIdentifier else { return nil }
+            return MeetingApp(id: id, title: app.localizedName ?? id)
+        }
+        var seen = Set<String>()
+        apps = apps.filter { seen.insert($0.id).inserted }.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+        if !meetingApp.isEmpty && !apps.contains(where: { $0.id == meetingApp }) {
+            apps.append(MeetingApp(id: meetingApp, title: meetingApp + " (not running)"))
+        }
+        meetingApps = [MeetingApp(id: "", title: "All system audio")] + apps
+    }
+
+    func chooseMeetingApp(_ id: String) {
+        meetingApp = id
+        actions.update({ $0.setNative("meeting_app_bundle_id", .string(id)) }, nil)
+    }
+
+    func openSystemAudioSettings() {
+        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")!)
+    }
+
+    func chooseProvider(_ provider: SettingsFile.TranscriptionProvider) {
+        self.provider = provider
+        actions.update({ $0.setNative("transcription_provider", .string(provider.rawValue)) }, nil)
+    }
+
+    func saveAPIKey() {
+        do {
+            try OpenAIKeychain.save(apiKey)
+            keyMessage = apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "API key removed." : "API key saved in Keychain."
+            apiKey = ""
+        } catch { keyMessage = "Could not save the API key in Keychain." }
     }
 
     func setKeepRecordings(_ on: Bool) {
@@ -259,12 +321,47 @@ private struct GeneralSettings: View {
                 Toggle(isOn: Binding(get: { model.dictationOn }, set: { model.setDictationOn($0) })) {
                     HStack(spacing: 4) {
                         Text("Dictation")
-                        InfoButton(text: "Hold F12 or Right Control and speak; let go to type it. While it's off, those keys work as normal.")
+                        InfoButton(text: "Hold your microphone shortcut and speak; let go to type it. While it's off, those keys work as normal.")
                     }
                 }
                 Picker("Microphone", selection: Binding(get: { model.microphone }, set: { model.chooseMicrophone($0) })) {
                     ForEach(model.microphones) { Text($0.title).tag($0.name) }
                 }
+            }
+            Section {
+                ShortcutEditor(title: "Microphone", shortcut: $model.shortcuts.microphone)
+                ShortcutEditor(title: "Meeting audio", shortcut: $model.shortcuts.meeting)
+                Toggle("Also use Right Control for microphone", isOn: $model.shortcuts.rightControl)
+                HStack {
+                    Button("Save Shortcuts") { model.saveShortcuts() }
+                    Button("Restore Defaults") { model.shortcuts = .defaults; model.saveShortcuts() }
+                }
+                Text("Hold the shortcut to record, then release its main key to paste. Function keys may need Fn/🌐 on a MacBook. Choose combinations unused by your other apps.").font(.caption).foregroundStyle(.secondary)
+                if !model.shortcutMessage.isEmpty { Text(model.shortcutMessage).font(.caption) }
+            }
+            Section {
+                Picker("Transcription", selection: Binding(get: { model.provider }, set: { model.chooseProvider($0) })) {
+                    Text("Whisper (local)").tag(SettingsFile.TranscriptionProvider.whisper)
+                    Text("GPT Live Transcribe (OpenAI)").tag(SettingsFile.TranscriptionProvider.openai)
+                }
+                Text("Restart Voice Type after changing the transcription provider.").font(.caption).foregroundStyle(.secondary)
+                if model.provider == .openai {
+                    Text("Uploads audio to OpenAI after you release the key. Requires internet and a paid OpenAI API account. Live previews are unavailable.").font(.caption)
+                    SecureField("OpenAI API key", text: $model.apiKey)
+                    Button(model.apiKey.isEmpty ? "Remove Saved Key" : "Save API Key") { model.saveAPIKey() }
+                    if !model.keyMessage.isEmpty { Text(model.keyMessage).font(.caption) }
+                }
+            }
+            Section {
+                Text("Hold your meeting audio shortcut to transcribe. Release to paste into the text box you focused before pressing it.").font(.caption)
+                Picker("Meeting audio source", selection: Binding(get: { model.meetingApp }, set: { model.chooseMeetingApp($0) })) {
+                    ForEach(model.meetingApps) { Text($0.title).tag($0.id) }
+                }
+                HStack {
+                    Button("Refresh Apps") { model.refreshMeetingApps() }
+                    Button("System Audio Permission") { model.openSystemAudioSettings() }
+                }
+                Text("You keep hearing playback normally. macOS asks for System Audio Recording permission the first time. Browser capture may include other tabs. The selected transcription provider also handles meeting audio.").font(.caption).foregroundStyle(.secondary)
             }
             Section {
                 Toggle(isOn: Binding(get: { model.keepRecordings }, set: { model.setKeepRecordings($0) })) {
@@ -466,5 +563,33 @@ private struct PermissionSettings: View {
         }
         .formStyle(.grouped)
         .onReceive(tick) { _ in model.refreshPermissions() }
+    }
+}
+
+/// Explicit key and modifier choices also work on MacBooks without right-side Control.
+private struct ShortcutEditor: View {
+    var title: String
+    @Binding var shortcut: VoiceTypeCore.KeyboardShortcut
+
+    private func modifier(_ mask: UInt64) -> Binding<Bool> {
+        Binding(get: { shortcut.modifiers & mask != 0 }, set: { on in
+            if on { shortcut.modifiers |= mask } else { shortcut.modifiers &= ~mask }
+        })
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Picker(title, selection: $shortcut.keycode) {
+                ForEach(VoiceTypeCore.KeyboardShortcut.keys, id: \.code) { key in Text(key.title).tag(key.code) }
+            }
+            HStack {
+                Toggle("⌘", isOn: modifier(VoiceTypeCore.KeyboardShortcut.command)).help("Command")
+                Toggle("⌥", isOn: modifier(VoiceTypeCore.KeyboardShortcut.option)).help("Option")
+                Toggle("⌃", isOn: modifier(VoiceTypeCore.KeyboardShortcut.control)).help("Control")
+                Toggle("⇧", isOn: modifier(VoiceTypeCore.KeyboardShortcut.shift)).help("Shift")
+                Spacer()
+                Text(shortcut.title).foregroundStyle(.secondary)
+            }.toggleStyle(.checkbox)
+        }
     }
 }

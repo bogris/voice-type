@@ -26,7 +26,8 @@ import VoiceTypeCore
 final class KeyboardTap: @unchecked Sendable {
     enum Status: String { case notStarted = "not-started", running = "event-tap", waitingForPermission = "waiting-for-permission" }
 
-    private var keys = HotkeyState()
+    private var bindings = ShortcutBindings()
+    private let onMeetingChange: @Sendable (Bool) -> Void
     private var port: CFMachPort?
     private var runLoop: CFRunLoop?
     private var thread: Thread?
@@ -43,16 +44,26 @@ final class KeyboardTap: @unchecked Sendable {
     private var mousePort: CFMachPort?
     private let log: @Sendable (String) -> Void
 
-    init(drawing: DrawingSession? = nil, log: @escaping @Sendable (String) -> Void = { _ in }, onChange: @escaping @Sendable (Bool) -> Void) {
+    init(drawing: DrawingSession? = nil, log: @escaping @Sendable (String) -> Void = { _ in }, onMeetingChange: @escaping @Sendable (Bool) -> Void = { _ in }, onChange: @escaping @Sendable (Bool) -> Void) {
         self.drawing = drawing
         self.log = log
         self.onChange = onChange
+        self.onMeetingChange = onMeetingChange
+        let shortcuts = SettingsFile.load().shortcuts
+        bindings = ShortcutBindings(shortcuts)
     }
 
     var status: Status { lock.withLock { status_ } }
 
     /// Whether presses from now on are swallowed. A key already down keeps its press's choice.
     func setSwallowing(_ on: Bool) { swallowing.store(on, ordering: .relaxed) }
+
+    /// Apply a complete pair together, after any held keys have been released.
+    func updateShortcuts(_ configuration: ShortcutConfiguration) {
+        guard let loop = runLoop else { return }
+        CFRunLoopPerformBlock(loop, CFRunLoopMode.defaultMode.rawValue) { [self] in bindings.update(configuration) }
+        CFRunLoopWakeUp(loop)
+    }
 
     /// Creates the tap. Fails (returns false) without Accessibility and Input Monitoring; the
     /// app tries again every couple of seconds until they're granted.
@@ -128,8 +139,11 @@ final class KeyboardTap: @unchecked Sendable {
     func reset() {
         guard let loop = runLoop else { return }
         CFRunLoopPerformBlock(loop, CFRunLoopMode.defaultMode.rawValue) { [self] in
-            let wasDown = keys.isDown
-            keys.reset()
+            let wasDown = bindings.microphone.isDown
+            let meetingWasDown = bindings.meeting.isDown
+            bindings.meeting.reset()
+            if meetingWasDown { onMeetingChange(false) }
+            bindings.microphone.reset()
             keyDown.store(false, ordering: .relaxed)
             drawing?.reset()
             if wasDown { onChange(false) }
@@ -140,8 +154,11 @@ final class KeyboardTap: @unchecked Sendable {
     fileprivate func handle(_ type: CGEventType, _ event: CGEvent) -> Unmanaged<CGEvent>? {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             if let port { CGEvent.tapEnable(tap: port, enable: true) }
-            let wasDown = keys.isDown
-            keys.reset()
+            let wasDown = bindings.microphone.isDown
+            let meetingWasDown = bindings.meeting.isDown
+            bindings.meeting.reset()
+            if meetingWasDown { onMeetingChange(false) }
+            bindings.microphone.reset()
             keyDown.store(false, ordering: .relaxed)
             // The key-up may be among the lost events, so the mouse mustn't stay a pen.
             drawing?.reset()
@@ -155,17 +172,26 @@ final class KeyboardTap: @unchecked Sendable {
         case .flagsChanged: kind = .flagsChanged
         default: return Unmanaged.passUnretained(event)
         }
-        let wasDown = keys.isDown
-        let disposition = keys.handle(kind, keycode: event.getIntegerValueField(.keyboardEventKeycode), flags: event.flags.rawValue,
+        bindings.prepareForEvent()
+        let code = event.getIntegerValueField(.keyboardEventKeycode)
+        let meetingWasDown = bindings.meeting.isDown
+        let meetingDisposition: HotkeyState.Disposition = bindings.microphone.owns(keycode: code) ? .notOurs : bindings.meeting.handle(kind, keycode: event.getIntegerValueField(.keyboardEventKeycode), flags: event.flags.rawValue,
+                                                   swallowing: swallowing.load(ordering: .relaxed))
+        if meetingDisposition != .notOurs {
+            if bindings.meeting.isDown != meetingWasDown { onMeetingChange(bindings.meeting.isDown) }
+            return meetingDisposition == .swallow ? nil : Unmanaged.passUnretained(event)
+        }
+        let wasDown = bindings.microphone.isDown
+        let disposition = bindings.microphone.handle(kind, keycode: event.getIntegerValueField(.keyboardEventKeycode), flags: event.flags.rawValue,
                                       swallowing: swallowing.load(ordering: .relaxed))
         guard disposition != .notOurs else { return Unmanaged.passUnretained(event) }
         // Key repeats come through as more key-downs; only real changes go on.
-        if keys.isDown != wasDown {
-            keyDown.store(keys.isDown, ordering: .relaxed)
+        if bindings.microphone.isDown != wasDown {
+            keyDown.store(bindings.microphone.isDown, ordering: .relaxed)
             // Stop drawing the moment the key goes up, right here rather than when the
             // controller gets to it, so a click straight after release reaches the app.
-            if !keys.isDown { drawing?.keyReleased() }
-            onChange(keys.isDown)
+            if !bindings.microphone.isDown { drawing?.keyReleased() }
+            onChange(bindings.microphone.isDown)
         }
         return disposition == .swallow ? nil : Unmanaged.passUnretained(event)
     }
