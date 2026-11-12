@@ -89,6 +89,7 @@ final class SettingsModel: ObservableObject {
     @Published var meetingApp = ""
     @Published var meetingApps: [MeetingApp] = []
     @Published var provider = SettingsFile.TranscriptionProvider.whisper
+    @Published var hasSavedAPIKey: Bool?
     @Published var apiKey = ""
     @Published var keyMessage = ""
     @Published var accurateMarkers = true
@@ -105,6 +106,7 @@ final class SettingsModel: ObservableObject {
     func reload(status: NativeStatus) {
         let file = SettingsFile.load()
         provider = file.transcriptionProvider
+        refreshAPIKeyStatus()
         shortcuts = file.shortcuts
         meetingApp = file.meetingAppBundleID
         refreshMeetingApps()
@@ -241,15 +243,29 @@ final class SettingsModel: ObservableObject {
 
     func chooseProvider(_ provider: SettingsFile.TranscriptionProvider) {
         self.provider = provider
+        if provider == .openai { refreshAPIKeyStatus() }
         actions.update({ $0.setNative("transcription_provider", .string(provider.rawValue)) }, nil)
     }
 
+    func refreshAPIKeyStatus() { hasSavedAPIKey = OpenAIKeychain.hasSavedKey() }
+
     func saveAPIKey() {
+        guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         do {
             try OpenAIKeychain.save(apiKey)
-            keyMessage = apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "API key removed." : "API key saved in Keychain."
             apiKey = ""
+            refreshAPIKeyStatus()
+            keyMessage = "API key saved. Its validity will be checked when you transcribe."
         } catch { keyMessage = "Could not save the API key in Keychain." }
+    }
+
+    func removeAPIKey() {
+        do {
+            try OpenAIKeychain.save("")
+            apiKey = ""
+            refreshAPIKeyStatus()
+            keyMessage = "API key removed. OpenAI transcription needs a key."
+        } catch { keyMessage = "Could not remove the API key from Keychain." }
     }
 
     func setKeepRecordings(_ on: Bool) {
@@ -406,8 +422,21 @@ private struct GeneralSettings: View {
                 Text("Restart Voice Type after changing the transcription provider.").font(.caption).foregroundStyle(.secondary)
                 if model.provider == .openai {
                     Text("Uploads audio to OpenAI after you release the key. Requires internet and a paid OpenAI API account. Live previews are unavailable.").font(.caption)
-                    SecureField("OpenAI API key", text: $model.apiKey)
-                    Button(model.apiKey.isEmpty ? "Remove Saved Key" : "Save API Key") { model.saveAPIKey() }
+                    if model.hasSavedAPIKey == true {
+                        Text("API key saved in Keychain. Validity not checked.").font(.caption)
+                    } else if model.hasSavedAPIKey == false {
+                        Text("No API key saved. Add your key to use OpenAI transcription.").font(.caption)
+                    } else {
+                        Text("Could not check Keychain for a saved key.").font(.caption)
+                    }
+                    SecureField(model.hasSavedAPIKey == true ? "Replacement OpenAI API key" : "Enter your OpenAI API key", text: $model.apiKey)
+                    HStack {
+                        Button(model.hasSavedAPIKey == true ? "Replace API Key" : "Save API Key") { model.saveAPIKey() }
+                            .disabled(model.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        if model.hasSavedAPIKey == true {
+                            Button("Remove Saved Key") { model.removeAPIKey() }
+                        }
+                    }
                     if !model.keyMessage.isEmpty { Text(model.keyMessage).font(.caption) }
                 }
             }

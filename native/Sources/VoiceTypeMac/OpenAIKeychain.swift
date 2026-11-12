@@ -8,6 +8,21 @@ enum OpenAIKeychain {
          kSecAttrService as String: "com.mikerosoft.voice-type-native.openai",
          kSecAttrAccount as String: "api-key"]
     }
+    /// Inspect only item attributes. Never decrypt the key or show an authorization prompt
+    /// just to render Settings. Nil means Keychain couldn't establish presence.
+    static func hasSavedKey() -> Bool? {
+        var attributes = query
+        attributes[kSecReturnAttributes as String] = true
+        attributes[kSecMatchLimit as String] = kSecMatchLimitOne
+        attributes[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUIFail
+        var item: CFTypeRef?
+        switch SecItemCopyMatching(attributes as CFDictionary, &item) {
+        case errSecSuccess: return true
+        case errSecItemNotFound: return false
+        default: return nil
+        }
+    }
+
     static func load() throws -> String {
         var attributes = query
         attributes[kSecReturnData as String] = true
