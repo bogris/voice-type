@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import Synchronization
 import SwiftUI
 import VoiceTypeCore
@@ -28,6 +29,7 @@ public final class NativeApp: NSObject, NSApplicationDelegate {
     private let statusQueue = DispatchQueue(label: "voice-type.status", qos: .utility)
     private let housekeeping = DispatchQueue(label: "voice-type.housekeeping", qos: .utility)
     private let catalog = CoreAudioCatalog()
+    private var microphonePermissionGate = MicrophonePermissionGate()
     /// Saving and transcribing, one dictation at a time. Recovery and History's "Transcribe
     /// again" use it too, so they never overlap a dictation's own finalisation.
     private let finaliseQueue = DispatchQueue(label: "voice-type.finalise", qos: .userInitiated)
@@ -90,6 +92,7 @@ public final class NativeApp: NSObject, NSApplicationDelegate {
         super.init()
         app = self
         settingsWindow.onClose = { [weak self] in
+            self?.settingsModel?.stopShortcutRecording()
             self?.settingsModel?.saveWordsNow()
             self?.settingsModel = nil
         }
@@ -201,6 +204,10 @@ public final class NativeApp: NSObject, NSApplicationDelegate {
             self?.show(note.object as? String ?? "settings")
         }
         repeating(every: 2, on: housekeeping) { [weak self] in self?.noteHealth() }
+        if Permission.microphone.state != "allowed" {
+            startDictation()
+            return
+        }
         let recent = history.recent()
         let plan = RestartBackoff.plan(recent, now: Date())
         switch plan {
@@ -223,11 +230,25 @@ public final class NativeApp: NSObject, NSApplicationDelegate {
 
     private func startDictation() {
         guard !dictationStarted, lock.isHeld else { return }
+        switch microphonePermissionGate.next(state: Permission.microphone.state) {
+        case .request:
+            setAppState(("waiting_for_microphone", "Allow Microphone in Settings > Permissions"))
+            AVCaptureDevice.requestAccess(for: .audio) { [weak self] _ in
+                DispatchQueue.main.async { self?.startDictation() }
+            }
+            return
+        case .wait:
+            setAppState(("waiting_for_microphone", "Allow Microphone in Settings > Permissions"))
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in self?.startDictation() }
+            return
+        case .start: break
+        }
         dictationStarted = true
         backoff?.cancel()
         setAppState(nil)
         // Made before the controller, which tells it whether to swallow the keys.
         tap = makeTap()
+        tap?.setShortcutRecording(settingsModel?.recordingShortcut != nil)
         buildController()
         onController { $0.start() }
         startTap()
@@ -602,6 +623,7 @@ public final class NativeApp: NSObject, NSApplicationDelegate {
     private func makeSettingsModel() -> SettingsModel {
         SettingsModel(actions: SettingsModel.Actions(
             setEnabled: { [weak self] on in self?.onController { $0.setEnabled(on) } },
+            setShortcutRecording: { [weak self] on in self?.tap?.setShortcutRecording(on) },
             chooseMicrophone: { [weak self] in self?.chooseMicrophone($0) },
             update: { [weak self] change, then in self?.updateSettings(change, then: then) },
             openLog: { [weak self] in self?.openLog() },

@@ -60,7 +60,7 @@ If no certificate is available, create an Apple Development certificate for your
 
 ## Keyboard shortcuts
 
-In Settings > General, choose a key and modifiers separately for **Microphone** and **Meeting audio**, then click **Save Shortcuts**. Command, Option, Control and Shift combinations work, such as Command+Shift+D for your voice and Command+Shift+M for meeting audio. Letters, numbers and Space require Command, Option or Control so ordinary typing keeps working. Choose combinations that your other apps do not use.
+In Settings > General, click **Record Shortcut** beside **Microphone** or **Meeting audio**, press your combination and release its main key, then click **Save Shortcuts**. Escape cancels. Dictation shortcuts are suspended while you record a new one; switching away or closing Settings cancels recording. Command, Option, Control and Shift combinations work, such as Command+Shift+D for your voice and Command+Shift+M for meeting audio. Letters, numbers and Space require Command, Option or Control so ordinary typing keeps working. Choose combinations that your other apps do not use.
 
 Changes apply without restarting. Hold the chosen shortcut to record, then release its main key to paste. If you release a modifier first, releasing the main key still stops recording. Defaults are F12 for microphone, F11 for meeting audio, and an optional Right Control microphone shortcut for external keyboards. You can disable that extra shortcut or restore all defaults from Settings. Function keys may still require Fn or Globe on a MacBook. Letter names refer to physical US keyboard positions.
 

@@ -25,11 +25,11 @@ enum Permission: String, CaseIterable {
 
     var why: String {
         switch self {
-        case .accessibility: return "Holds F12 and Right Control for push-to-talk, presses Cmd+V and checks a text box has focus."
-        case .inputMonitoring: return "Sees F12 and Right Control while another app is in front."
+        case .accessibility: return "Uses your shortcuts for push-to-talk, presses Cmd+V and checks a text box has focus."
+        case .inputMonitoring: return "Sees your dictation shortcuts while another app is in front."
         case .microphone: return "Hears you while the key is down."
         case .pasteFromOtherApps: return "Copies what's on your clipboard before pasting, so it can put it back."
-        case .screenRecording: return "Screenshots the window you draw on while holding the key. Asked the first time you draw."
+        case .screenRecording: return "Optional: screenshots the window you draw on while holding the microphone shortcut. Not needed for microphone dictation or audio-only meeting capture."
         }
     }
 

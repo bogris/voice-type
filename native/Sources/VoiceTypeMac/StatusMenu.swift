@@ -41,7 +41,7 @@ final class StatusMenu: NSObject, NSMenuDelegate {
         case "finalising": symbol = "ellipsis.circle"
         case "idle": symbol = !status.enabled ? "mic.slash" : status.keysBlockedBy != nil ? "lock" : "mic"
         case "waiting_for_lock": symbol = "mic.slash"
-        case "waiting_for_permission", "needs_model", "needs_attention": symbol = "exclamationmark.triangle"
+        case "waiting_for_permission", "waiting_for_microphone", "needs_model", "needs_attention": symbol = "exclamationmark.triangle"
         default: symbol = "hourglass"
         }
         item.button?.image = NSImage(systemSymbolName: symbol, accessibilityDescription: "Voice Type Native: \(Self.describe(status))")
@@ -55,6 +55,7 @@ final class StatusMenu: NSObject, NSMenuDelegate {
         case "recording": return "Recording"
         case "finalising": return "Transcribing"
         case "waiting_for_lock": return "Another copy of Voice Type Native is running"
+        case "waiting_for_microphone": return "Microphone permission needed"
         case "waiting_for_permission": return "Needs Accessibility and Input Monitoring"
         case "needs_model": return "Speech model missing"
         case "stopping": return "Stopping"
@@ -66,13 +67,15 @@ final class StatusMenu: NSObject, NSMenuDelegate {
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
-        let state = NSMenuItem(title: Self.describe(status), action: nil, keyEquivalent: "")
+        let state = NSMenuItem(title: MenuText.compact(Self.describe(status)), action: nil, keyEquivalent: "")
+        state.toolTip = Self.describe(status)
         state.isEnabled = false
         menu.addItem(state)
         if ["retrying", "needs_attention"].contains(status.state) && !status.message.isEmpty {
             // What went wrong, and that F12 and Right Control work as normal keys meanwhile.
             for line in [status.message, "Your shortcut keys work normally until then."] {
-                let info = NSMenuItem(title: line, action: nil, keyEquivalent: "")
+                let info = NSMenuItem(title: MenuText.compact(line), action: nil, keyEquivalent: "")
+                info.toolTip = line
                 info.isEnabled = false
                 menu.addItem(info)
             }
@@ -87,7 +90,8 @@ final class StatusMenu: NSObject, NSMenuDelegate {
             for line in ["Your shortcut keys go to that app until it lets go.",
                          "Usually a password box: click out of it or close the tab.",
                          "In a terminal, turn off Secure Keyboard Entry in its menu."] {
-                let info = NSMenuItem(title: line, action: nil, keyEquivalent: "")
+                let info = NSMenuItem(title: MenuText.compact(line), action: nil, keyEquivalent: "")
+                info.toolTip = line
                 info.isEnabled = false
                 menu.addItem(info)
             }
@@ -138,7 +142,7 @@ final class StatusMenu: NSObject, NSMenuDelegate {
         let settings = NSMenuItem(title: "Settings...", action: #selector(showSettings), keyEquivalent: ",")
         settings.target = self
         menu.addItem(settings)
-        let missing = Permission.missing
+        let missing = Permission.missing.filter(\.isRequired)
         if !missing.isEmpty {
             let permissions = NSMenuItem(title: "Permissions (\(missing.count) missing)...", action: #selector(showPermissions), keyEquivalent: "")
             permissions.target = self

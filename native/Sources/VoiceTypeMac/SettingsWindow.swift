@@ -11,6 +11,7 @@ final class SettingsModel: ObservableObject {
 
     struct Actions {
         var setEnabled: (Bool) -> Void
+        var setShortcutRecording: (Bool) -> Void = { _ in }
         var chooseMicrophone: (String) -> Void
         /// Changes settings.json on the app's settings queue, then hands the saved file back
         /// on the main thread.
@@ -55,6 +56,8 @@ final class SettingsModel: ObservableObject {
         var buttonTitle: String {
             if permission == .pasteFromOtherApps && state == "not_asked" { return "Check Now" }
             if permission == .microphone && state == "not_asked" { return "Ask Now" }
+            if permission == .inputMonitoring { return "Allow Input Monitoring" }
+            if permission == .accessibility { return "Allow Accessibility" }
             return "Open System Settings"
         }
     }
@@ -77,6 +80,10 @@ final class SettingsModel: ObservableObject {
         var id: String
         var title: String
     }
+    @Published var recordingShortcut: Bool?
+    private var shortcutMonitor: Any?
+    private var focusObserver: NSObjectProtocol?
+    private var shortcutRecorder = ShortcutRecording()
     @Published var shortcuts = ShortcutConfiguration.defaults
     @Published var shortcutMessage = ""
     @Published var meetingApp = ""
@@ -157,7 +164,48 @@ final class SettingsModel: ObservableObject {
         actions.chooseMicrophone(name)
     }
 
+    func beginShortcutRecording(meeting: Bool) {
+        stopShortcutRecording()
+        recordingShortcut = meeting
+        shortcutRecorder = ShortcutRecording()
+        shortcutMessage = "Press a shortcut, then release its main key. Escape cancels."
+        actions.setShortcutRecording(true)
+        focusObserver = NotificationCenter.default.addObserver(forName: NSWindow.didResignKeyNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.stopShortcutRecording()
+        }
+        shortcutMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp, .flagsChanged]) { [weak self] event in
+            guard let self, let meeting = self.recordingShortcut else { return event }
+            let kind: HotkeyState.EventKind = event.type == .keyDown ? .keyDown : event.type == .keyUp ? .keyUp : .flagsChanged
+            switch self.shortcutRecorder.handle(kind, keycode: Int64(event.keyCode), flags: UInt64(event.modifierFlags.rawValue)) {
+            case .waiting: break
+            case .invalid: self.shortcutMessage = "Use a function key or combine a key with Command, Option or Control. Escape cancels."
+            case .cancelled:
+                self.stopShortcutRecording()
+                self.shortcutMessage = "Shortcut recording cancelled."
+            case .captured(let shortcut):
+                if meeting { self.shortcuts.meeting = shortcut } else { self.shortcuts.microphone = shortcut }
+                self.stopShortcutRecording()
+                self.shortcutMessage = "Shortcut recorded. Click Save Shortcuts to apply."
+            }
+            return nil
+        }
+    }
+
+    func stopShortcutRecording() {
+        if let shortcutMonitor { NSEvent.removeMonitor(shortcutMonitor); self.shortcutMonitor = nil }
+        if let focusObserver { NotificationCenter.default.removeObserver(focusObserver); self.focusObserver = nil }
+        recordingShortcut = nil
+        actions.setShortcutRecording(false)
+    }
+
+    deinit {
+        if let shortcutMonitor { NSEvent.removeMonitor(shortcutMonitor) }
+        if let focusObserver { NotificationCenter.default.removeObserver(focusObserver) }
+        actions.setShortcutRecording(false)
+    }
+
     func saveShortcuts() {
+        stopShortcutRecording()
         guard shortcuts.isValid else {
             shortcutMessage = "Choose different shortcuts. Letters, numbers and Space need Command, Option or Control."
             return
@@ -329,8 +377,19 @@ private struct GeneralSettings: View {
                 }
             }
             Section {
-                ShortcutEditor(title: "Microphone", shortcut: $model.shortcuts.microphone)
-                ShortcutEditor(title: "Meeting audio", shortcut: $model.shortcuts.meeting)
+                HStack {
+                    Text("Microphone")
+                    Spacer()
+                    Text(model.shortcuts.microphone.title).foregroundStyle(.secondary)
+                    Button(model.recordingShortcut == false ? "Press shortcut…" : "Record Shortcut") { model.beginShortcutRecording(meeting: false) }
+                }
+                HStack {
+                    Text("Meeting audio")
+                    Spacer()
+                    Text(model.shortcuts.meeting.title).foregroundStyle(.secondary)
+                    Button(model.recordingShortcut == true ? "Press shortcut…" : "Record Shortcut") { model.beginShortcutRecording(meeting: true) }
+                }
+                if model.recordingShortcut != nil { Button("Cancel Recording") { model.stopShortcutRecording() } }
                 Toggle("Also use Right Control for microphone", isOn: $model.shortcuts.rightControl)
                 HStack {
                     Button("Save Shortcuts") { model.saveShortcuts() }
@@ -544,11 +603,13 @@ private struct PermissionSettings: View {
     var body: some View {
         Form {
             Section {
+                Text("Microphone dictation needs Accessibility, Input Monitoring and Microphone. Screen Recording is optional and only used for drawing screenshots.").font(.caption).foregroundStyle(.secondary)
+                Text("If Voice Type is missing from Input Monitoring, click Allow Input Monitoring here. If macOS still does not list it, use + in System Settings and select Voice Type Native from your Applications folder.").font(.caption).foregroundStyle(.secondary)
                 ForEach(model.permissions) { row in
                     HStack(spacing: 8) {
                         Image(systemName: row.satisfied ? "checkmark.circle" : "exclamationmark.circle.fill")
                             .foregroundStyle(row.satisfied ? AnyShapeStyle(.secondary) : AnyShapeStyle(.orange))
-                        Text(row.permission.title)
+                        Text(row.permission.title + (row.permission.isRequired ? "" : " (optional)"))
                         InfoButton(text: row.permission.why)
                         Spacer()
                         if row.state == "allowed" {
@@ -563,33 +624,5 @@ private struct PermissionSettings: View {
         }
         .formStyle(.grouped)
         .onReceive(tick) { _ in model.refreshPermissions() }
-    }
-}
-
-/// Explicit key and modifier choices also work on MacBooks without right-side Control.
-private struct ShortcutEditor: View {
-    var title: String
-    @Binding var shortcut: VoiceTypeCore.KeyboardShortcut
-
-    private func modifier(_ mask: UInt64) -> Binding<Bool> {
-        Binding(get: { shortcut.modifiers & mask != 0 }, set: { on in
-            if on { shortcut.modifiers |= mask } else { shortcut.modifiers &= ~mask }
-        })
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Picker(title, selection: $shortcut.keycode) {
-                ForEach(VoiceTypeCore.KeyboardShortcut.keys, id: \.code) { key in Text(key.title).tag(key.code) }
-            }
-            HStack {
-                Toggle("⌘", isOn: modifier(VoiceTypeCore.KeyboardShortcut.command)).help("Command")
-                Toggle("⌥", isOn: modifier(VoiceTypeCore.KeyboardShortcut.option)).help("Option")
-                Toggle("⌃", isOn: modifier(VoiceTypeCore.KeyboardShortcut.control)).help("Control")
-                Toggle("⇧", isOn: modifier(VoiceTypeCore.KeyboardShortcut.shift)).help("Shift")
-                Spacer()
-                Text(shortcut.title).foregroundStyle(.secondary)
-            }.toggleStyle(.checkbox)
-        }
     }
 }

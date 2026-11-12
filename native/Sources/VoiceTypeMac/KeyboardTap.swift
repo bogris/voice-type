@@ -37,6 +37,7 @@ final class KeyboardTap: @unchecked Sendable {
     private var status_: Status = .notStarted
     /// Read on the tap thread at each press, so no lock.
     private let swallowing = Atomic<Bool>(true)
+    private let shortcutRecording = Atomic<Bool>(false)
     /// The hotkey's state as the tap thread last saw it, for the controller's queue to read
     /// when a drawing session starts.
     private let keyDown = Atomic<Bool>(false)
@@ -57,6 +58,11 @@ final class KeyboardTap: @unchecked Sendable {
 
     /// Whether presses from now on are swallowed. A key already down keeps its press's choice.
     func setSwallowing(_ on: Bool) { swallowing.store(on, ordering: .relaxed) }
+
+    func setShortcutRecording(_ on: Bool) {
+        shortcutRecording.store(on, ordering: .relaxed)
+        if on { reset() }
+    }
 
     /// Apply a complete pair together, after any held keys have been released.
     func updateShortcuts(_ configuration: ShortcutConfiguration) {
@@ -165,6 +171,7 @@ final class KeyboardTap: @unchecked Sendable {
             if wasDown { onChange(false) }
             return Unmanaged.passUnretained(event)
         }
+        if shortcutRecording.load(ordering: .relaxed) { return Unmanaged.passUnretained(event) }
         let kind: HotkeyState.EventKind
         switch type {
         case .keyDown: kind = .keyDown
